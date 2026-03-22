@@ -1,0 +1,89 @@
+name: Smart Download and Zip (Comma Input)
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Paste URLs separated by comma"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Prepare directory
+        run: mkdir files
+
+      - name: Download files (smart)
+        run: |
+          cd files
+          i=1
+
+          # تبدیل کاما به خط جدید
+          echo "${{ github.event.inputs.urls }}" | tr ',' '\n' | while read url; do
+            url=$(echo "$url" | xargs)
+            [ -z "$url" ] && continue
+
+            echo "Processing $url"
+
+            # دانلود با گرفتن اسم واقعی
+            wget --content-disposition --trust-server-names \
+                 --tries=3 --timeout=30 \
+                 "$url" -P . || continue
+
+            # آخرین فایل دانلود شده
+            latest=$(ls -t | head -n1)
+
+            # حذف query/token از اسم
+            clean_name=$(echo "$latest" | cut -d'?' -f1)
+
+            if [ "$latest" != "$clean_name" ]; then
+              mv "$latest" "$clean_name"
+              latest="$clean_name"
+            fi
+
+            # اگر اسم hash بود → rename
+            if [[ "$latest" =~ ^[0-9a-f]{10,}$ ]]; then
+              latest="file_$i"
+              mv "$(ls -t | head -n1)" "$latest"
+            fi
+
+            # جلوگیری از تکراری بودن
+            if [ -f "${i}_$latest" ]; then
+              mv "$latest" "${i}_$latest"
+              latest="${i}_$latest"
+            fi
+
+            echo "Saved as $latest"
+
+            i=$((i+1))
+          done
+
+      - name: Create zip
+        run: |
+          zip -r combined.zip files
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: bundle-${{ github.run_id }}
+          release_name: Bundle ${{ github.run_id }}
+          draft: false
+          prerelease: false
+
+      - name: Upload zip
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./combined.zip
+          asset_name: combined.zip
+          asset_content_type: application/zip
